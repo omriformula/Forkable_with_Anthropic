@@ -117,6 +117,7 @@ class FigmaService {
   /**
    * Extract file key from Figma URL or return file ID if already provided
    * URL format: https://www.figma.com/file/{file-key}/title
+   * Or: https://www.figma.com/design/{file-key}/title
    * Or just the file ID: CbS1cPHwdvmOJfPJFzKodU
    */
   extractFileKey(figmaUrlOrId: string): string {
@@ -125,12 +126,25 @@ class FigmaService {
       return figmaUrlOrId;
     }
     
-    // Otherwise, extract from URL
-    const match = figmaUrlOrId.match(/\/file\/([a-zA-Z0-9-_]+)/);
+    // Handle both /file/ and /design/ URL formats
+    const match = figmaUrlOrId.match(/\/(?:file|design)\/([a-zA-Z0-9-_]+)/);
     if (!match) {
       throw new Error('Invalid Figma URL or file ID format');
     }
     return match[1];
+  }
+
+  /**
+   * Extract node ID from Figma URL (if present)
+   * Converts from URL format (66-186) to API format (66:186)
+   */
+  extractNodeId(figmaUrl: string): string | undefined {
+    const match = figmaUrl.match(/node-id=([^&]+)/);
+    if (!match) return undefined;
+    
+    // Convert from URL format (66-186) to API format (66:186)
+    const nodeId = decodeURIComponent(match[1]);
+    return nodeId.replace(/-/g, ':');
   }
 
   /**
@@ -423,11 +437,14 @@ class FigmaService {
   /**
    * Enhanced analysis with comprehensive styling data
    */
-  async analyzeFileWithAssets(fileKey: string): Promise<FigmaAnalysisResult & { 
+  async analyzeFileWithAssets(fileKey: string, nodeId?: string): Promise<FigmaAnalysisResult & { 
     designTokens: DesignTokens;
     assetUrls: { [nodeId: string]: string };
   }> {
     console.log('🎨 [FIGMA SERVICE] Starting enhanced analysis for fileKey:', fileKey);
+    if (nodeId) {
+      console.log('🎯 [FIGMA SERVICE] Specific node ID provided:', nodeId);
+    }
     
     // Get file data
     const fileData = await this.getFile(fileKey);
@@ -446,14 +463,25 @@ class FigmaService {
     const designTokens = this.extractDesignTokens(fileData);
     console.log('🎨 [FIGMA SERVICE] Design tokens extracted:', designTokens);
     
-    // Get main frames for screenshot
-    const mainFrames = this.getMainFrames(fileData);
-    console.log('🖼️ [FIGMA SERVICE] Main frames found:', mainFrames.length);
+    // Get target node for screenshot
+    let targetNodeId = '';
+    if (nodeId) {
+      // Use specific node ID if provided
+      targetNodeId = nodeId;
+      console.log('🎯 [FIGMA SERVICE] Using specific node ID:', targetNodeId);
+    } else {
+      // Get main frames for screenshot
+      const mainFrames = this.getMainFrames(fileData);
+      console.log('🖼️ [FIGMA SERVICE] Main frames found:', mainFrames.length);
+      if (mainFrames.length > 0) {
+        targetNodeId = mainFrames[0];
+      }
+    }
     
-    // Export main screen image
+    // Export screen image
     let imageUrl = '';
-    if (mainFrames.length > 0) {
-      const images = await this.getImages(fileKey, [mainFrames[0]], {
+    if (targetNodeId) {
+      const images = await this.getImages(fileKey, [targetNodeId], {
         format: 'png',
         scale: 2,
         use_absolute_bounds: true

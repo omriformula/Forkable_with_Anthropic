@@ -55,7 +55,7 @@ function App() {
           <CssBaseline />
           <GlobalStyles styles={{ html: { WebkitFontSmoothing: "auto" } }} />
           <RefineSnackbarProvider>
-            <DevtoolsProvider>
+            {/* <DevtoolsProvider> */}
               <Refine
                 dataProvider={dataProvider(supabaseClient)}
                 liveProvider={liveProvider(supabaseClient)}
@@ -195,8 +195,8 @@ function App() {
                 <UnsavedChangesNotifier />
                 <DocumentTitleHandler />
               </Refine>
-              <DevtoolsPanel />
-            </DevtoolsProvider>
+              {/* <DevtoolsPanel /> */}
+            {/* </DevtoolsProvider> */}
           </RefineSnackbarProvider>
         </ColorModeContextProvider>
       </RefineKbarProvider>

@@ -147,6 +147,16 @@ For each component, provide this exact structure:
   "functionality": "Description of any interactive behavior"
 }
 
+## CRITICAL: DATA ATTRIBUTE REQUIREMENT
+**EVERY extracted component MUST include data attributes on its root element:**
+
+- Add data-component-id="ComponentName" to the outermost JSX element
+- Add data-component-type="atom|molecule|organism|template" to the outermost JSX element  
+- These attributes enable component identification in the full preview
+- Example: The root Box element should include both data attributes
+
+**REMEMBER**: Every component code must start with these data attributes on the root element.
+
 ## EXAMPLE OF PROPER CODE FORMATTING:
 Always use double quotes for the code field, never template literals.
 Escape all quotes inside the JSX code using backslash.

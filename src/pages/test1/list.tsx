@@ -293,6 +293,12 @@ export const Test1List = () => {
     };
   }, []);
 
+  // Update visual selector when selectedComponentId changes
+  useEffect(() => {
+    // Trigger update of visual selector overlay
+    window.dispatchEvent(new CustomEvent('updateSelectedOverlay'));
+  }, [selectedComponentId]);
+
   const handleFetchFigmaImage = async () => {
     if (!figmaPat.trim() || !figmaUrl.trim()) {
       setSnackbarMessage('Please enter both Figma PAT and URL');
@@ -1310,42 +1316,92 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
       const VisualSelector = () => {
         React.useEffect(() => {
           let overlayDiv = null;
+          let hoverOverlayDiv = null;
+          let selectedOverlayDiv = null;
           let isSelectionMode = true;
           
-          const createOverlay = () => {
-            if (overlayDiv) return overlayDiv;
+          const createOverlay = (isSelected = false) => {
+            const overlay = document.createElement('div');
+            overlay.style.position = 'absolute';
+            overlay.style.pointerEvents = 'none';
+            overlay.style.zIndex = '9999';
+            overlay.style.transition = 'all 0.2s ease';
+            overlay.style.borderRadius = '4px';
             
-            overlayDiv = document.createElement('div');
-            overlayDiv.style.position = 'absolute';
-            overlayDiv.style.pointerEvents = 'none';
-            overlayDiv.style.border = '2px solid #ff6b3d';
-            overlayDiv.style.backgroundColor = 'rgba(255, 107, 61, 0.1)';
-            overlayDiv.style.zIndex = '9999';
-            overlayDiv.style.transition = 'all 0.2s ease';
-            overlayDiv.style.borderRadius = '4px';
-            return overlayDiv;
+            if (isSelected) {
+              // Selected component styling
+              overlay.style.border = '3px solid #ff6b3d';
+              overlay.style.backgroundColor = 'rgba(255, 107, 61, 0.1)';
+              overlay.style.boxShadow = '0 0 0 1px #ff6b3d, 0 4px 12px rgba(255, 107, 61, 0.3)';
+            } else {
+              // Hover styling
+              overlay.style.border = '2px solid #ff6b3d';
+              overlay.style.backgroundColor = 'rgba(255, 107, 61, 0.05)';
+            }
+            
+            return overlay;
           };
           
-          const hideOverlay = () => {
-            if (overlayDiv) {
-              overlayDiv.style.display = 'none';
+          const hideHoverOverlay = () => {
+            if (hoverOverlayDiv) {
+              hoverOverlayDiv.style.display = 'none';
             }
           };
           
-          const showOverlay = (element, container) => {
-            if (!overlayDiv) {
-              overlayDiv = createOverlay();
-              container.appendChild(overlayDiv);
+          const showHoverOverlay = (element, container) => {
+            if (!hoverOverlayDiv) {
+              hoverOverlayDiv = createOverlay(false);
+              container.appendChild(hoverOverlayDiv);
             }
             
             const elementRect = element.getBoundingClientRect();
             const containerRect = container.getBoundingClientRect();
             
-            overlayDiv.style.display = 'block';
-            overlayDiv.style.left = (elementRect.left - containerRect.left) + 'px';
-            overlayDiv.style.top = (elementRect.top - containerRect.top) + 'px';
-            overlayDiv.style.width = elementRect.width + 'px';
-            overlayDiv.style.height = elementRect.height + 'px';
+            hoverOverlayDiv.style.display = 'block';
+            hoverOverlayDiv.style.left = (elementRect.left - containerRect.left) + 'px';
+            hoverOverlayDiv.style.top = (elementRect.top - containerRect.top) + 'px';
+            hoverOverlayDiv.style.width = elementRect.width + 'px';
+            hoverOverlayDiv.style.height = elementRect.height + 'px';
+          };
+          
+          const updateSelectedOverlay = (container) => {
+            // Remove existing selected overlay
+            if (selectedOverlayDiv && selectedOverlayDiv.parentNode) {
+              selectedOverlayDiv.parentNode.removeChild(selectedOverlayDiv);
+              selectedOverlayDiv = null;
+            }
+            
+            // Find the selected component element
+            const selectedComponent = findSelectedComponent(container);
+            if (selectedComponent) {
+              selectedOverlayDiv = createOverlay(true);
+              container.appendChild(selectedOverlayDiv);
+              
+              const elementRect = selectedComponent.getBoundingClientRect();
+              const containerRect = container.getBoundingClientRect();
+              
+              selectedOverlayDiv.style.display = 'block';
+              selectedOverlayDiv.style.left = (elementRect.left - containerRect.left) + 'px';
+              selectedOverlayDiv.style.top = (elementRect.top - containerRect.top) + 'px';
+              selectedOverlayDiv.style.width = elementRect.width + 'px';
+              selectedOverlayDiv.style.height = elementRect.height + 'px';
+              
+              console.log('🎯 Updated selected overlay for:', '${selectedComponentId}');
+            }
+          };
+          
+          const findSelectedComponent = (container) => {
+            if (!'${selectedComponentId}') return null;
+            
+            // Try to find the component using our identification heuristics
+            const allElements = container.querySelectorAll('*');
+            for (let element of allElements) {
+              const componentGuess = identifyComponent(element);
+              if (componentGuess === '${selectedComponentId}') {
+                return element;
+              }
+            }
+            return null;
           };
           
           const handleMouseOver = (e) => {
@@ -1355,14 +1411,19 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
             const previewContainer = e.currentTarget;
             const element = e.target;
             
-            // Skip if hovering over the overlay itself
-            if (element === overlayDiv) return;
+            // Skip if hovering over overlays
+            if (element === hoverOverlayDiv || element === selectedOverlayDiv) return;
             
             // Only highlight certain elements (avoid text nodes, small elements)
             if (element.tagName && 
                 !['HTML', 'BODY', 'SCRIPT', 'STYLE'].includes(element.tagName) &&
                 element.offsetWidth > 20 && element.offsetHeight > 20) {
-              showOverlay(element, previewContainer);
+              
+              // Don't show hover overlay if this is the selected component
+              const componentGuess = identifyComponent(element);
+              if (componentGuess !== '${selectedComponentId}') {
+                showHoverOverlay(element, previewContainer);
+              }
             }
           };
           
@@ -1370,7 +1431,7 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
             if (!isSelectionMode) return;
             // Don't hide if moving to child element
             if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return;
-            hideOverlay();
+            hideHoverOverlay();
           };
           
           const handleClick = (e) => {
@@ -1380,8 +1441,6 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
             
             const element = e.target;
             console.log('🎯 Clicked element:', element);
-            console.log('🎯 Element classes:', element.className);
-            console.log('🎯 Element styles:', element.style.cssText);
             
             // Try to identify which component this element belongs to
             const componentGuess = identifyComponent(element);
@@ -1439,16 +1498,30 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
               previewContainer.addEventListener('mouseout', handleMouseOut, true);
               previewContainer.addEventListener('click', handleClick, true);
               
+              // Update selected overlay when component changes
+              updateSelectedOverlay(previewContainer);
+              
+              // Listen for external selection changes (from chips)
+              const handleExternalSelection = () => {
+                updateSelectedOverlay(previewContainer);
+              };
+              
+              window.addEventListener('updateSelectedOverlay', handleExternalSelection);
+              
               console.log('🎯 Visual selector initialized for Component Editor');
               
               // Return cleanup function
               return () => {
-                if (overlayDiv && overlayDiv.parentNode) {
-                  overlayDiv.parentNode.removeChild(overlayDiv);
+                if (hoverOverlayDiv && hoverOverlayDiv.parentNode) {
+                  hoverOverlayDiv.parentNode.removeChild(hoverOverlayDiv);
+                }
+                if (selectedOverlayDiv && selectedOverlayDiv.parentNode) {
+                  selectedOverlayDiv.parentNode.removeChild(selectedOverlayDiv);
                 }
                 previewContainer.removeEventListener('mouseover', handleMouseOver, true);
                 previewContainer.removeEventListener('mouseout', handleMouseOut, true);
                 previewContainer.removeEventListener('click', handleClick, true);
+                window.removeEventListener('updateSelectedOverlay', handleExternalSelection);
               };
             } else {
               console.warn('🎯 Component Editor preview container not found');
@@ -1479,7 +1552,7 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
   };
 
   // NEW: Simplified preview preparation - just clean code, no complex injection
-  const prepareCodeForComponentEditor = (code: string): string => {
+  const prepareCodeForComponentEditor = (code: string, selectedId: string | null = null): string => {
     try {
       let processedCode = code;
       
@@ -1496,8 +1569,11 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
       const componentNameMatch = processedCode.match(/(?:const|function)\s+(\w+)\s*[=\(]/);
       const componentName = componentNameMatch ? componentNameMatch[1] : 'GeneratedComponent';
       
-      // Add visual selector and render call
-      const visualSelectorCode = addVisualSelectionToPreview(null, []);
+      // Add visual selector with current selection
+      const visualSelectorCode = addVisualSelectionToPreview(selectedId, []).replace(
+        /\$\{selectedComponentId\}/g, 
+        selectedId || 'null'
+      );
       processedCode = visualSelectorCode + '\n\n' + processedCode;
       
       // For React Live with noInline=true, we need to call render()
@@ -1525,35 +1601,38 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
       <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="h4" gutterBottom>
+        <Typography variant="h4">
           Claude-4-Sonnet UI Generator
         </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <Typography variant="body2" color="text.secondary">
-            Mode:
-          </Typography>
-          <ToggleButtonGroup
-            value={mode}
-            exclusive
-            onChange={handleModeChange}
-            size="small"
-          >
-            <ToggleButton value="description">
-              <Description sx={{ mr: 1 }} />
-              Description
-            </ToggleButton>
-            <ToggleButton value="code-generation">
-              <Code sx={{ mr: 1 }} />
-              Code Generation
-            </ToggleButton>
-          </ToggleButtonGroup>
-        </Box>
       </Box>
 
       {/* Main Content */}
       <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {/* Query Panel */}
         <Box sx={{ width: '350px', borderRight: 1, borderColor: 'divider', p: 2, overflow: 'auto' }}>
+          {/* Mode Selection */}
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Mode:
+            </Typography>
+            <ToggleButtonGroup
+              value={mode}
+              exclusive
+              onChange={handleModeChange}
+              size="small"
+              fullWidth
+            >
+              <ToggleButton value="description">
+                <Description sx={{ mr: 1 }} />
+                Description
+              </ToggleButton>
+              <ToggleButton value="code-generation">
+                <Code sx={{ mr: 1 }} />
+                Code Generation
+              </ToggleButton>
+            </ToggleButtonGroup>
+          </Box>
+
           <Typography variant="h6" gutterBottom>
             Fetch from Figma
           </Typography>
@@ -1734,7 +1813,7 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
 
         {/* Code Editor & Preview Panel */}
         {mode === 'code-generation' && (
-          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%'}}>
+          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', maxHeight: '100%' }}>
             <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
               <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)}>
                 <Tab label="Code Editor" />
@@ -1746,7 +1825,7 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
 
             {/* Code Editor Tab */}
             {activeTab === 0 && (
-              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                 <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider', display: 'flex', gap: 1 }}>
                   <Button
                     size="small"
@@ -1813,8 +1892,8 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
 
             {/* Live Preview Tab */}
             {activeTab === 1 && (
-              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider', display: 'flex', gap: 1, alignItems: 'center' }}>
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider', display: 'flex', gap: 1, alignItems: 'center', flexShrink: 0 }}>
                   <Button
                     size="small"
                     startIcon={<Refresh />}
@@ -1869,7 +1948,7 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
                   </Box>
                 </Box>
                 
-                <Box sx={{ flex: 1, p: 2, overflow: 'auto', bgcolor: 'grey.50' }}>
+                <Box sx={{ flex: 1, p: 2, overflow: 'auto', bgcolor: 'grey.50', minHeight: 0 }}>
                   {generatedCode ? (
                     <LiveProvider 
                       code={prepareCodeForPreview(generatedCode)} 
@@ -1892,7 +1971,7 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
 
             {/* Components Tab */}
             {activeTab === 2 && (
-              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                 {/* Components Toolbar */}
                 <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
@@ -2232,9 +2311,9 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
 
             {/* Component Editor Tab */}
             {activeTab === 3 && (
-              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', maxHeight: '100%' }}>
                 {/* Component Editor Toolbar */}
-                <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider', display: 'flex', gap: 1, alignItems: 'center' }}>
+                <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider', display: 'flex', gap: 1, alignItems: 'center', flexShrink: 0 }}>
                   <Typography variant="h6">Component Editor</Typography>
                   <Box sx={{ mx: 2, height: 24, width: 1, bgcolor: 'divider' }} />
                   
@@ -2275,23 +2354,23 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
                 {/* Main Editor Layout */}
                 <Box sx={{ flex: 1, display: 'flex', minHeight: 0 }}>
                   {/* Left Side - Live Preview with Highlighting */}
-                  <Box sx={{ flex: 2, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                    <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'grey.50' }}>
+                  <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', maxHeight: '100%' }}>
+                    <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'grey.50', flexShrink: 0 }}>
                       <Typography variant="subtitle2" color="text.secondary">
                         Live Preview {selectedComponentId ? `- ${selectedComponentId} Selected` : ''}
                       </Typography>
                     </Box>
                     
-                                         <Box sx={{ flex: 1, p: 2, overflow: 'auto', bgcolor: 'grey.50' }} data-testid="component-editor-preview">
-                       {generatedCode ? (
-                         <LiveProvider 
-                           code={prepareCodeForComponentEditor(generatedCode)} 
-                           scope={scope} 
-                           noInline={true}
-                         >
-                           <LiveError />
-                           <LivePreview />
-                         </LiveProvider>
+                    <Box sx={{ flex: 1, p: 2, overflow: 'auto', bgcolor: 'grey.50', minHeight: 0 }} data-testid="component-editor-preview">
+                      {generatedCode ? (
+                        <LiveProvider 
+                          code={prepareCodeForComponentEditor(generatedCode, selectedComponentId)} 
+                          scope={scope} 
+                          noInline={true}
+                        >
+                          <LiveError />
+                          <LivePreview />
+                        </LiveProvider>
                       ) : (
                         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', flexDirection: 'column', gap: 2 }}>
                           <MuiIcons.ViewModule sx={{ fontSize: 64, color: 'text.secondary' }} />
@@ -2315,7 +2394,7 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
                   </Box>
                   
                   {/* Right Side - Component Details and Analysis */}
-                  <Box sx={{ width: 400, borderLeft: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column' }}>
+                  <Box sx={{ width: 400, borderLeft: 1, borderColor: 'divider', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                     {selectedComponentId ? (
                       <>
                         {/* Selected Component Details */}
@@ -2347,8 +2426,8 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
                           })()}
                         </Box>
                         
-                        {/* Analysis and Actions */}
-                        <Box sx={{ flex: 1, p: 2, overflow: 'auto' }}>
+                        {/* Component Props and Details */}
+                        <Box sx={{ flex: 1, p: 2, overflow: 'auto', minHeight: 0 }}>
                           <Typography variant="subtitle2" gutterBottom>
                             Component Actions
                           </Typography>

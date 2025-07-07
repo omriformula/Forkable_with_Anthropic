@@ -84,6 +84,41 @@ export interface DesignTokens {
   fontWeights: number[];
 }
 
+// NEW: Interfaces for bounds matching
+export interface ComponentBounds {
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  element?: Element;
+}
+
+export interface NodeMatchCandidate {
+  figmaNode: ComponentAnalysis;
+  componentBounds: ComponentBounds;
+  matchScore: number;
+  confidence: number;
+  matchType: 'exact' | 'partial' | 'approximate';
+  reasons: string[];
+  textMatch?: boolean;
+  colorMatch?: boolean;
+  typeMatch?: boolean;
+}
+
+export interface ComponentMatchCandidates {
+  componentBounds: ComponentBounds;
+  candidates: NodeMatchCandidate[];
+  confirmedMatch?: NodeMatchCandidate;
+}
+
+export interface BoundsMatchingResult {
+  componentMatches: ComponentMatchCandidates[];
+  unmatchedComponents: ComponentBounds[];
+  unmatchedNodes: ComponentAnalysis[];
+  overallConfidence: number;
+}
+
 class FigmaService {
   private baseUrl = 'https://api.figma.com/v1';
   private accessToken: string;
@@ -702,6 +737,221 @@ class FigmaService {
       return hex.length === 1 ? '0' + hex : hex;
     };
     return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+
+  // NEW: Match React component bounds to Figma node bounds - return multiple candidates
+  matchComponentsToNodes(
+    componentBounds: ComponentBounds[],
+    figmaComponents: ComponentAnalysis[]
+  ): BoundsMatchingResult {
+    const componentMatches: ComponentMatchCandidates[] = [];
+    const unmatchedComponents: ComponentBounds[] = [];
+    const unmatchedNodes: ComponentAnalysis[] = [...figmaComponents];
+    
+    for (const component of componentBounds) {
+      const candidates: NodeMatchCandidate[] = [];
+      
+      // Get all potential matches for this component
+      for (const node of figmaComponents) {
+        const matchResult = this.calculateNodeMatch(component, node);
+        
+        // Only include candidates with some relevance (>20% confidence)
+        if (matchResult.confidence > 20) {
+          candidates.push(matchResult);
+        }
+      }
+      
+      // Sort candidates by confidence (best first)
+      candidates.sort((a, b) => b.confidence - a.confidence);
+      
+      // Take top 3 candidates
+      const topCandidates = candidates.slice(0, 3);
+      
+      if (topCandidates.length > 0) {
+        componentMatches.push({
+          componentBounds: component,
+          candidates: topCandidates
+        });
+        
+        // Remove the best match from unmatchedNodes to avoid duplicates
+        const bestMatchIndex = unmatchedNodes.findIndex(n => n.id === topCandidates[0].figmaNode.id);
+        if (bestMatchIndex > -1) {
+          unmatchedNodes.splice(bestMatchIndex, 1);
+        }
+      } else {
+        unmatchedComponents.push(component);
+      }
+    }
+    
+    // Calculate overall confidence as average of best candidates
+    const overallConfidence = componentMatches.length > 0 ? 
+      componentMatches.reduce((sum, match) => sum + match.candidates[0].confidence, 0) / componentMatches.length : 0;
+    
+    return {
+      componentMatches,
+      unmatchedComponents,
+      unmatchedNodes,
+      overallConfidence
+    };
+  }
+
+  // NEW: Calculate match score between component and Figma node - enhanced with content matching
+  private calculateNodeMatch(component: ComponentBounds, node: ComponentAnalysis): NodeMatchCandidate {
+    const reasons: string[] = [];
+    let matchScore = 0;
+    let confidence = 0;
+    let matchType: 'exact' | 'partial' | 'approximate' = 'approximate';
+    
+    // Text content matching (0-40 points) - most important now
+    const textScore = this.calculateTextScore(component, node);
+    matchScore += textScore;
+    const textMatch = textScore > 20;
+    if (textMatch) reasons.push('Similar text content');
+    
+    // Type/category similarity (0-30 points) - second most important
+    const typeScore = this.calculateTypeScore(component, node);
+    matchScore += typeScore;
+    const typeMatch = typeScore > 15;
+    if (typeMatch) reasons.push('Similar type');
+    
+    // Visual features (0-20 points) - shapes, colors, etc.
+    const visualScore = this.calculateVisualScore(component, node);
+    matchScore += visualScore;
+    const colorMatch = visualScore > 10;
+    if (colorMatch) reasons.push('Similar visual features');
+    
+    // Size similarity (0-10 points) - least important now
+    const sizeScore = this.calculateSizeScore(component, node) * 0.25; // Much less weight
+    matchScore += sizeScore;
+    if (sizeScore > 5) reasons.push('Similar size');
+    
+    // Convert to confidence percentage
+    confidence = Math.min(matchScore, 100);
+    
+    // Determine match type
+    if (confidence > 80) {
+      matchType = 'exact';
+    } else if (confidence > 60) {
+      matchType = 'partial';
+    } else {
+      matchType = 'approximate';
+    }
+    
+    return {
+      figmaNode: node,
+      componentBounds: component,
+      matchScore,
+      confidence,
+      matchType,
+      reasons,
+      textMatch,
+      colorMatch,
+      typeMatch
+    };
+  }
+
+  // NEW: Calculate text content similarity
+  private calculateTextScore(component: ComponentBounds, node: ComponentAnalysis): number {
+    if (!component.element) return 0;
+    
+    const componentText = (component.element.textContent || '').toLowerCase().trim();
+    const nodeText = (node.name || '').toLowerCase().trim();
+    
+    if (!componentText || !nodeText) return 0;
+    
+    // Exact match
+    if (componentText === nodeText) return 40;
+    
+    // Partial match
+    if (componentText.includes(nodeText) || nodeText.includes(componentText)) return 30;
+    
+    // Word matching
+    const componentWords = componentText.split(/\s+/);
+    const nodeWords = nodeText.split(/\s+/);
+    const matchingWords = componentWords.filter(word => 
+      nodeWords.some(nodeWord => word.includes(nodeWord) || nodeWord.includes(word))
+    );
+    
+    if (matchingWords.length > 0) {
+      return Math.min((matchingWords.length / componentWords.length) * 25, 25);
+    }
+    
+    return 0;
+  }
+
+  // NEW: Calculate visual features similarity
+  private calculateVisualScore(component: ComponentBounds, node: ComponentAnalysis): number {
+    let score = 0;
+    
+    // Check for similar styling patterns
+    if (component.element) {
+      const style = window.getComputedStyle(component.element);
+      
+      // Border radius matching
+      const borderRadius = parseFloat(style.borderRadius) || 0;
+      if (borderRadius > 0 && node.properties.cornerRadius) {
+        score += 5;
+      }
+      
+      // Background color matching (basic detection)
+      const bgColor = style.backgroundColor;
+      if (bgColor !== 'rgba(0, 0, 0, 0)' && bgColor !== 'transparent') {
+        score += 5;
+      }
+      
+      // Shadow detection
+      const boxShadow = style.boxShadow;
+      if (boxShadow !== 'none' && node.properties.effects) {
+        score += 5;
+      }
+      
+      // Border detection
+      const border = style.border;
+      if (border !== 'none' && node.properties.strokes) {
+        score += 5;
+      }
+    }
+    
+    return score;
+  }
+
+  private calculateSizeScore(component: ComponentBounds, node: ComponentAnalysis): number {
+    const widthRatio = Math.min(component.width, node.bounds.width) / Math.max(component.width, node.bounds.width);
+    const heightRatio = Math.min(component.height, node.bounds.height) / Math.max(component.height, node.bounds.height);
+    const averageRatio = (widthRatio + heightRatio) / 2;
+    return averageRatio * 40;
+  }
+
+  private calculateTypeScore(component: ComponentBounds, node: ComponentAnalysis): number {
+    const nodeType = node.type.toLowerCase();
+    const componentName = component.name.toLowerCase();
+    
+    // Direct type matching
+    if (componentName.includes('button') && nodeType === 'instance') return 20;
+    if (componentName.includes('card') && nodeType === 'frame') return 15;
+    if (componentName.includes('text') && nodeType === 'text') return 20;
+    if (componentName.includes('image') && nodeType === 'rectangle') return 15;
+    
+    // Generic matching
+    if (nodeType === 'frame' || nodeType === 'instance') return 10;
+    
+    return 5;
+  }
+
+  // NEW: Get individual node images for debugging
+  async getNodeImages(fileKey: string, nodeIds: string[]): Promise<Record<string, string>> {
+    try {
+      const images = await this.getImages(fileKey, nodeIds, {
+        format: 'png',
+        scale: 1,
+        use_absolute_bounds: true
+      });
+      
+      return images;
+    } catch (error) {
+      console.error('Error fetching node images:', error);
+      return {};
+    }
   }
 }
 

@@ -47,7 +47,7 @@ import { styled } from '@mui/material/styles';
 import Editor from '@monaco-editor/react';
 import { LiveProvider, LiveError, LivePreview, withLive } from 'react-live';
 import { queryClaude, ClaudeRequest, ClaudeResponse } from '../../services/claude';
-import FigmaService, { ComponentAnalysis, DesignTokens, FigmaAnalysisResult } from '../../services/figmaService';
+import FigmaService, { ComponentAnalysis, DesignTokens, FigmaAnalysisResult, ComponentBounds, BoundsMatchingResult, ComponentMatchCandidates, NodeMatchCandidate } from '../../services/figmaService';
 import * as MuiComponents from '@mui/material';
 import * as MuiIcons from '@mui/icons-material';
 import { 
@@ -277,6 +277,13 @@ export const Test1List = () => {
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
   const [highlightMode, setHighlightMode] = useState(false);
   const [originalGeneratedCode, setOriginalGeneratedCode] = useState<string>('');
+  
+  // NEW: Bounds matching state
+  const [boundsMatchingResults, setBoundsMatchingResults] = useState<BoundsMatchingResult | null>(null);
+  const [isMatchingBounds, setIsMatchingBounds] = useState(false);
+  const [componentBounds, setComponentBounds] = useState<ComponentBounds[]>([]);
+  const [figmaComponents, setFigmaComponents] = useState<ComponentAnalysis[]>([]);
+  const [nodeImages, setNodeImages] = useState<Record<string, string>>({});
 
   // Add event listener for visual component selection
   useEffect(() => {
@@ -1597,6 +1604,140 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
     }
   };
 
+  // NEW: Extract component bounds from visual selector
+  const extractComponentBounds = (): ComponentBounds[] => {
+    const bounds: ComponentBounds[] = [];
+    const previewContainer = document.querySelector('[data-testid="component-editor-preview"]');
+    
+    if (!previewContainer) {
+      console.warn('Component editor preview container not found');
+      return bounds;
+    }
+    
+    // Use our existing component identification logic
+    const identifyComponent = (element: Element): string | null => {
+      const style = window.getComputedStyle(element);
+      const text = element.textContent || '';
+      
+      // Look for button-like elements
+      if (element.tagName === 'BUTTON' || 
+          (style.cursor === 'pointer' && text.includes('ADD'))) {
+        return 'AddNewButton';
+      }
+      
+      // Look for header-like elements  
+      if (style.display === 'flex' && style.alignItems === 'center' && 
+          element.querySelector('button, [role="button"]')) {
+        return 'PageHeader';
+      }
+      
+      // Look for card-like elements
+      if (style.backgroundColor === 'rgb(255, 255, 255)' && 
+          style.borderRadius && element.getBoundingClientRect().width > 80 && 
+          element.getBoundingClientRect().height > 80) {
+        return 'PaymentMethodCard';
+      }
+      
+      // Look for total amount elements
+      if (style.display === 'flex' && style.justifyContent === 'space-between' &&
+          text.includes('$')) {
+        return 'TotalAmount';
+      }
+      
+      return null;
+    };
+    
+    // Get all elements in the preview container
+    const allElements = previewContainer.querySelectorAll('*');
+    const containerRect = previewContainer.getBoundingClientRect();
+    
+    for (const element of allElements) {
+      const componentName = identifyComponent(element);
+      if (componentName) {
+        const rect = element.getBoundingClientRect();
+        
+        // Convert to relative coordinates within the preview container
+        const componentBounds: ComponentBounds = {
+          name: componentName,
+          x: rect.left - containerRect.left,
+          y: rect.top - containerRect.top,
+          width: rect.width,
+          height: rect.height,
+          element: element
+        };
+        
+        bounds.push(componentBounds);
+      }
+    }
+    
+    console.log(`🔍 Extracted ${bounds.length} component bounds:`, bounds);
+    return bounds;
+  };
+
+  // NEW: Trigger bounds matching process
+  const handleBoundsMatching = async () => {
+    if (!figmaUrl || !figmaPat) {
+      setSnackbarMessage('Please provide both Figma URL and Personal Access Token');
+      setSnackbarOpen(true);
+      return;
+    }
+    
+    setIsMatchingBounds(true);
+    setSnackbarMessage('Starting bounds matching analysis...');
+    setSnackbarOpen(true);
+    
+    try {
+      // Initialize Figma service
+      const figmaService = new FigmaService(figmaPat);
+      const fileKey = figmaService.extractFileKey(figmaUrl);
+      
+      // Get Figma file analysis
+      const analysisResult = await figmaService.analyzeFileWithAssets(fileKey);
+      console.log('🎨 Figma analysis result:', analysisResult);
+      
+      // Store Figma components
+      setFigmaComponents(analysisResult.components);
+      
+      // Extract React component bounds
+      const reactBounds = extractComponentBounds();
+      setComponentBounds(reactBounds);
+      
+      if (reactBounds.length === 0) {
+        setSnackbarMessage('No React components found in preview. Make sure components are rendered in Component Editor.');
+        setSnackbarOpen(true);
+        return;
+      }
+      
+      // Perform bounds matching
+      const matchingResult = figmaService.matchComponentsToNodes(reactBounds, analysisResult.components);
+      console.log('🎯 Bounds matching result:', matchingResult);
+      
+      setBoundsMatchingResults(matchingResult);
+      
+      // Get node images for all candidates
+      const nodeIds = matchingResult.componentMatches.flatMap(cm => 
+        cm.candidates.map(candidate => candidate.figmaNode.id)
+      );
+      if (nodeIds.length > 0) {
+        const images = await figmaService.getNodeImages(fileKey, nodeIds);
+        setNodeImages(images);
+      }
+      
+      // Success message
+      setSnackbarMessage(
+        `Bounds matching completed! Found ${matchingResult.componentMatches.length} components with candidates (${Math.round(matchingResult.overallConfidence)}% avg confidence)`
+      );
+      setSnackbarOpen(true);
+      
+    } catch (error) {
+      console.error('Bounds matching failed:', error);
+      setSnackbarMessage(`Bounds matching failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setSnackbarOpen(true);
+    } finally {
+      setIsMatchingBounds(false);
+    }
+  };
+
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
@@ -2336,6 +2477,15 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
                     <Button
                       size="small"
                       variant="outlined"
+                      startIcon={isMatchingBounds ? <CircularProgress size={16} /> : <MuiIcons.CompareArrows />}
+                      onClick={handleBoundsMatching}
+                      disabled={isMatchingBounds || !figmaUrl || !figmaPat}
+                    >
+                      {isMatchingBounds ? 'Matching...' : 'Match Bounds'}
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
                       onClick={() => setSelectedComponentId(null)}
                       disabled={!selectedComponentId}
                     >
@@ -2530,6 +2680,149 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
                               </Box>
                             );
                           })()}
+
+                          {/* NEW: Match Confirmation Interface */}
+                          {boundsMatchingResults && (
+                            <Box sx={{ mt: 3 }}>
+                              <Typography variant="subtitle2" gutterBottom>
+                                Match Confirmation
+                              </Typography>
+                              
+                              <Card variant="outlined" sx={{ p: 2, mb: 2 }}>
+                                <Typography variant="body2" gutterBottom>
+                                  <strong>Overall Confidence:</strong> {Math.round(boundsMatchingResults.overallConfidence)}%
+                                </Typography>
+                                <Typography variant="body2" gutterBottom>
+                                  <strong>Components with Candidates:</strong> {boundsMatchingResults.componentMatches.length}
+                                </Typography>
+                                <Typography variant="body2" gutterBottom>
+                                  <strong>Unmatched Components:</strong> {boundsMatchingResults.unmatchedComponents.length}
+                                </Typography>
+                                <Typography variant="body2">
+                                  <strong>Unmatched Figma Nodes:</strong> {boundsMatchingResults.unmatchedNodes.length}
+                                </Typography>
+                              </Card>
+
+                              {/* Show candidates for selected component */}
+                              {selectedComponentId && boundsMatchingResults.componentMatches.find(cm => cm.componentBounds.name === selectedComponentId) && (
+                                <Card variant="outlined" sx={{ p: 2 }}>
+                                  <Typography variant="subtitle2" gutterBottom>
+                                    Select Match for {selectedComponentId}
+                                  </Typography>
+                                  {(() => {
+                                    const componentMatch = boundsMatchingResults.componentMatches.find(cm => cm.componentBounds.name === selectedComponentId);
+                                    if (!componentMatch) return null;
+                                    
+                                    return (
+                                      <Box>
+                                        <Typography variant="body2" gutterBottom>
+                                          Found {componentMatch.candidates.length} potential matches:
+                                        </Typography>
+                                        
+                                        {componentMatch.candidates.map((candidate, index) => (
+                                          <Card 
+                                            key={index}
+                                            variant="outlined" 
+                                            sx={{ 
+                                              p: 2, 
+                                              mb: 2,
+                                              cursor: 'pointer',
+                                              border: componentMatch.confirmedMatch?.figmaNode.id === candidate.figmaNode.id ? '2px solid #1976d2' : '1px solid #ddd',
+                                              '&:hover': {
+                                                backgroundColor: 'grey.50'
+                                              }
+                                            }}
+                                            onClick={() => {
+                                              // Update confirmed match
+                                              setBoundsMatchingResults(prev => {
+                                                if (!prev) return prev;
+                                                
+                                                const updatedMatches = prev.componentMatches.map(cm => 
+                                                  cm.componentBounds.name === selectedComponentId 
+                                                    ? { ...cm, confirmedMatch: candidate }
+                                                    : cm
+                                                );
+                                                
+                                                return {
+                                                  ...prev,
+                                                  componentMatches: updatedMatches
+                                                };
+                                              });
+                                            }}
+                                          >
+                                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                                              <Box sx={{ flex: 1 }}>
+                                                <Typography variant="subtitle2" gutterBottom>
+                                                  {candidate.figmaNode.name}
+                                                </Typography>
+                                                <Typography variant="caption" color="text.secondary">
+                                                  {candidate.figmaNode.type} • {candidate.reasons.join(', ')}
+                                                </Typography>
+                                              </Box>
+                                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                                                <Chip 
+                                                  label={`${Math.round(candidate.confidence)}%`}
+                                                  size="small"
+                                                  color={candidate.confidence > 80 ? 'success' : candidate.confidence > 60 ? 'warning' : 'error'}
+                                                />
+                                                {componentMatch.confirmedMatch?.figmaNode.id === candidate.figmaNode.id && (
+                                                  <Chip 
+                                                    label="Selected"
+                                                    size="small"
+                                                    color="primary"
+                                                    variant="filled"
+                                                  />
+                                                )}
+                                              </Box>
+                                            </Box>
+                                            
+                                            {/* Show match indicators */}
+                                            <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                                              {candidate.textMatch && <Chip label="Text Match" size="small" color="success" variant="outlined" />}
+                                              {candidate.typeMatch && <Chip label="Type Match" size="small" color="info" variant="outlined" />}
+                                              {candidate.colorMatch && <Chip label="Visual Match" size="small" color="secondary" variant="outlined" />}
+                                            </Box>
+                                            
+                                            {/* Show Figma node image if available */}
+                                            {nodeImages[candidate.figmaNode.id] && (
+                                              <Box sx={{ textAlign: 'center' }}>
+                                                <img 
+                                                  src={nodeImages[candidate.figmaNode.id]} 
+                                                  alt={candidate.figmaNode.name}
+                                                  style={{ 
+                                                    maxWidth: '100%',
+                                                    maxHeight: '120px',
+                                                    height: 'auto',
+                                                    border: '1px solid #ddd',
+                                                    borderRadius: '4px'
+                                                  }}
+                                                />
+                                              </Box>
+                                            )}
+                                          </Card>
+                                        ))}
+                                        
+                                        {componentMatch.confirmedMatch && (
+                                          <Button
+                                            variant="contained"
+                                            size="small"
+                                            onClick={() => {
+                                              // TODO: Extract precise styling from confirmed match
+                                              setSnackbarMessage(`Match confirmed for ${selectedComponentId}! Ready to extract precise styling.`);
+                                              setSnackbarOpen(true);
+                                            }}
+                                            sx={{ mt: 1 }}
+                                          >
+                                            Extract Styling from Confirmed Match
+                                          </Button>
+                                        )}
+                                      </Box>
+                                    );
+                                  })()}
+                                </Card>
+                              )}
+                            </Box>
+                          )}
                         </Box>
                       </>
                     ) : (
@@ -2542,6 +2835,60 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
                           <Typography variant="body2">
                             Click on any component chip above to select it and see detailed analysis.
                           </Typography>
+                          
+                          {/* Show match confirmation overview when no component is selected */}
+                          {boundsMatchingResults && (
+                            <Box sx={{ mt: 3, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
+                              <Typography variant="subtitle2" gutterBottom>
+                                Match Confirmation Overview
+                              </Typography>
+                              <Typography variant="body2" gutterBottom>
+                                Found {boundsMatchingResults.componentMatches.length} components with candidates
+                              </Typography>
+                              <Typography variant="body2">
+                                Overall confidence: {Math.round(boundsMatchingResults.overallConfidence)}%
+                              </Typography>
+                              
+                              {/* Show all component matches overview */}
+                              {boundsMatchingResults.componentMatches.length > 0 && (
+                                <Box sx={{ mt: 2 }}>
+                                  <Typography variant="body2" gutterBottom>
+                                    <strong>Components to Confirm:</strong>
+                                  </Typography>
+                                  {boundsMatchingResults.componentMatches.map((componentMatch, index) => (
+                                    <Box key={index} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                                      <Typography variant="caption">
+                                        {componentMatch.componentBounds.name} → {componentMatch.candidates.length} candidates
+                                        {componentMatch.confirmedMatch && ` (✓ ${componentMatch.confirmedMatch.figmaNode.name})`}
+                                      </Typography>
+                                      <Chip 
+                                        label={componentMatch.confirmedMatch ? 'Confirmed' : 'Pending'}
+                                        size="small"
+                                        color={componentMatch.confirmedMatch ? 'success' : 'warning'}
+                                      />
+                                    </Box>
+                                  ))}
+                                </Box>
+                              )}
+                              
+                              {boundsMatchingResults.unmatchedComponents.length > 0 && (
+                                <Box sx={{ mt: 2 }}>
+                                  <Typography variant="body2" gutterBottom>
+                                    <strong>Unmatched Components:</strong>
+                                  </Typography>
+                                  {boundsMatchingResults.unmatchedComponents.map((component, index) => (
+                                    <Typography key={index} variant="caption" component="div">
+                                      {component.name}
+                                    </Typography>
+                                  ))}
+                                </Box>
+                              )}
+                              
+                              <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block' }}>
+                                💡 Select a component above to confirm its Figma match
+                              </Typography>
+                            </Box>
+                          )}
                         </Box>
                       </Box>
                     )}

@@ -1322,7 +1322,7 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
             overlayDiv.style.backgroundColor = 'rgba(255, 107, 61, 0.1)';
             overlayDiv.style.zIndex = '9999';
             overlayDiv.style.transition = 'all 0.2s ease';
-            document.body.appendChild(overlayDiv);
+            overlayDiv.style.borderRadius = '4px';
             return overlayDiv;
           };
           
@@ -1332,30 +1332,37 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
             }
           };
           
-          const showOverlay = (element) => {
-            if (!overlayDiv) createOverlay();
+          const showOverlay = (element, container) => {
+            if (!overlayDiv) {
+              overlayDiv = createOverlay();
+              container.appendChild(overlayDiv);
+            }
             
-            const rect = element.getBoundingClientRect();
+            const elementRect = element.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
+            
             overlayDiv.style.display = 'block';
-            overlayDiv.style.left = rect.left + window.scrollX + 'px';
-            overlayDiv.style.top = rect.top + window.scrollY + 'px';
-            overlayDiv.style.width = rect.width + 'px';
-            overlayDiv.style.height = rect.height + 'px';
+            overlayDiv.style.left = (elementRect.left - containerRect.left) + 'px';
+            overlayDiv.style.top = (elementRect.top - containerRect.top) + 'px';
+            overlayDiv.style.width = elementRect.width + 'px';
+            overlayDiv.style.height = elementRect.height + 'px';
           };
           
           const handleMouseOver = (e) => {
             if (!isSelectionMode) return;
             e.stopPropagation();
             
+            const previewContainer = e.currentTarget;
+            const element = e.target;
+            
             // Skip if hovering over the overlay itself
-            if (e.target === overlayDiv) return;
+            if (element === overlayDiv) return;
             
             // Only highlight certain elements (avoid text nodes, small elements)
-            const element = e.target;
             if (element.tagName && 
                 !['HTML', 'BODY', 'SCRIPT', 'STYLE'].includes(element.tagName) &&
                 element.offsetWidth > 20 && element.offsetHeight > 20) {
-              showOverlay(element);
+              showOverlay(element, previewContainer);
             }
           };
           
@@ -1377,11 +1384,10 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
             console.log('🎯 Element styles:', element.style.cssText);
             
             // Try to identify which component this element belongs to
-            // This is a simple heuristic - in a real implementation you'd have more sophisticated mapping
             const componentGuess = identifyComponent(element);
             if (componentGuess) {
               console.log('🎯 Identified component:', componentGuess);
-              // You can emit a custom event here to update the selected component
+              // Emit event to update selected component
               window.dispatchEvent(new CustomEvent('componentSelected', { detail: componentGuess }));
             }
           };
@@ -1418,40 +1424,53 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
             return null;
           };
           
-          // Add event listeners to the preview container
-          const previewContainer = document.querySelector('[data-testid="react-live-preview"]') || 
-                                  document.querySelector('.react-live-preview') ||
-                                  document.body;
-          
-          if (previewContainer) {
-            previewContainer.addEventListener('mouseover', handleMouseOver, true);
-            previewContainer.addEventListener('mouseout', handleMouseOut, true);
-            previewContainer.addEventListener('click', handleClick, true);
+          // Wait for React Live to render, then find the preview container
+          const initializeSelector = () => {
+            // Find the preview container - specifically look for the Component Editor preview
+            const previewContainer = document.querySelector('[data-testid="component-editor-preview"]') || 
+                                    document.querySelector('.component-editor-preview');
             
-            console.log('🎯 Visual selector initialized');
+            if (previewContainer) {
+              // Make sure the container is positioned relatively for our absolute overlay
+              previewContainer.style.position = 'relative';
+              previewContainer.style.overflow = 'hidden';
+              
+              previewContainer.addEventListener('mouseover', handleMouseOver, true);
+              previewContainer.addEventListener('mouseout', handleMouseOut, true);
+              previewContainer.addEventListener('click', handleClick, true);
+              
+              console.log('🎯 Visual selector initialized for Component Editor');
+              
+              // Return cleanup function
+              return () => {
+                if (overlayDiv && overlayDiv.parentNode) {
+                  overlayDiv.parentNode.removeChild(overlayDiv);
+                }
+                previewContainer.removeEventListener('mouseover', handleMouseOver, true);
+                previewContainer.removeEventListener('mouseout', handleMouseOut, true);
+                previewContainer.removeEventListener('click', handleClick, true);
+              };
+            } else {
+              console.warn('🎯 Component Editor preview container not found');
+              return null;
+            }
+          };
+          
+          // Try to initialize immediately, if not found, wait a bit
+          let cleanup = initializeSelector();
+          
+          if (!cleanup) {
+            const timeout = setTimeout(() => {
+              cleanup = initializeSelector();
+            }, 100);
+            
+            return () => {
+              clearTimeout(timeout);
+              if (cleanup) cleanup();
+            };
           }
           
-          // Listen for external component selection updates
-          const handleExternalSelection = (e) => {
-            const componentName = e.detail;
-            console.log('🎯 External component selection:', componentName);
-            // You could highlight the selected component here
-          };
-          
-          window.addEventListener('componentSelected', handleExternalSelection);
-          
-          // Cleanup
-          return () => {
-            if (overlayDiv) {
-              document.body.removeChild(overlayDiv);
-            }
-            if (previewContainer) {
-              previewContainer.removeEventListener('mouseover', handleMouseOver, true);
-              previewContainer.removeEventListener('mouseout', handleMouseOut, true);
-              previewContainer.removeEventListener('click', handleClick, true);
-            }
-            window.removeEventListener('componentSelected', handleExternalSelection);
-          };
+          return cleanup;
         }, []);
         
         return null;
@@ -2263,7 +2282,7 @@ Return the COMPLETE enhanced code with only the target component modified. Do no
                       </Typography>
                     </Box>
                     
-                                         <Box sx={{ flex: 1, p: 2, overflow: 'auto', bgcolor: 'grey.50' }}>
+                                         <Box sx={{ flex: 1, p: 2, overflow: 'auto', bgcolor: 'grey.50' }} data-testid="component-editor-preview">
                        {generatedCode ? (
                          <LiveProvider 
                            code={prepareCodeForComponentEditor(generatedCode)} 
